@@ -1,0 +1,2 @@
+HUNAR_API_KEY=your_hunar_api_key_here
+GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"...","private_key":"...","client_email":"...@....iam.gserviceaccount.com",...}

@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Uber × Hunar.ai — Voice AI Playground</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%23000'/><circle cx='50' cy='50' r='38' fill='%23fff'/><rect x='12' y='45' width='44' height='10' fill='%23000'/><rect x='46' y='34' width='24' height='24' fill='%23000'/></svg>"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+    html,body,#root{height:100%;width:100%;overflow:hidden}
+    body{font-family:'DM Sans',sans-serif;background:#000;color:#fff}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+    @keyframes pulseRing{0%{transform:scale(1);opacity:.6}100%{transform:scale(1.6);opacity:0}}
+    @keyframes spinSlow{to{transform:rotate(360deg)}}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes slideIn{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:translateX(0)}}
+    @keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+    .fade-up{animation:fadeUp .6s cubic-bezier(.16,1,.3,1) both}
+    .fade-in{animation:fadeIn .5s ease both}
+    .slide-up{animation:slideUp .5s cubic-bezier(.16,1,.3,1) both}
+    .d1{animation-delay:.08s}.d2{animation-delay:.16s}.d3{animation-delay:.24s}.d4{animation-delay:.32s}.d5{animation-delay:.40s}
+    input:focus,select:focus{border-color:#444!important;outline:none}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script type="text/babel" data-type="module">
+const{useState,useEffect,useRef,useCallback}=React;
+
+// API_BASE is filled in automatically by the GitHub Actions deploy (Cloudflare Worker URL).
+// Left as the placeholder, the app calls its own /api routes (when served by the Worker itself).
+const API_BASE="__API_BASE__".startsWith("__")?"":"__API_BASE__";
+const POLL_INTERVAL=4000;
+const AGENTS=[
+  {id:"80413065-565e-48d0-813d-0a4597fe9d83",lang:"Hindi",langNative:"हिन्दी",flag:"🇮🇳",color:"#276EF1",desc:"Engage drivers in fluent Hindi with culturally aware churn-prevention conversations."},
+  {id:"9d18ffbb-2001-4cb3-94ef-257237fc3952",lang:"Bengali",langNative:"বাংলা",flag:"🇮🇳",color:"#F6AE2D",desc:"Win back Bengali-speaking drivers with warm, natural churn-prevention calls."},
+  {id:"527299c0-ddd7-412f-b3a0-1ad47d8d9a8e",lang:"Tamil",langNative:"தமிழ்",flag:"🇮🇳",color:"#06C167",desc:"Reach Tamil-speaking drivers with region-specific churn-prevention strategies."},
+  {id:"998867dc-fff2-4573-8656-491e8c89c8f0",lang:"Telugu",langNative:"తెలుగు",flag:"🇮🇳",color:"#C117E0",desc:"Prevent churn among Telugu-speaking drivers with personalized voice outreach."},
+  {id:"8e1df86e-8251-4bba-aa59-276cd960435f",lang:"Kannada",langNative:"ಕನ್ನಡ",flag:"🇮🇳",color:"#FF6937",desc:"Re-engage Kannada-speaking drivers before they churn with empathetic dialogue."},
+];
+const COUNTRY_CODES=[
+  {code:"+91",country:"IN"},{code:"+1",country:"US"},{code:"+44",country:"UK"},
+  {code:"+34",country:"ES"},{code:"+61",country:"AU"},{code:"+971",country:"AE"},
+  {code:"+65",country:"SG"},{code:"+81",country:"JP"},
+];
+const STATUS_META={
+  NOT_STARTED:{label:"Not Started",color:"#666",icon:"⏳",step:0},
+  SCHEDULED:{label:"Scheduled",color:"#F6AE2D",icon:"📋",step:1},
+  INITIATED:{label:"Initiated",color:"#276EF1",icon:"📡",step:2},
+  RINGING:{label:"Ringing",color:"#276EF1",icon:"🔔",step:3},
+  IN_PROGRESS:{label:"In Progress",color:"#06C167",icon:"🗣️",step:4},
+  COMPLETED:{label:"Completed",color:"#06C167",icon:"✅",step:5},
+  NOT_CONNECTED:{label:"Not Connected",color:"#F6AE2D",icon:"📵",step:5},
+  CANCELLED:{label:"Cancelled",color:"#ff3b30",icon:"🚫",step:5},
+  FAILED:{label:"Failed",color:"#ff3b30",icon:"❌",step:5},
+};
+const PIPELINE=["NOT_STARTED","SCHEDULED","INITIATED","RINGING","IN_PROGRESS","COMPLETED"];
+const TERMINAL=["COMPLETED","NOT_CONNECTED","CANCELLED","FAILED"];
+
+function fmtMobile(cc,m){const c=m.replace(/\D/g,"");return cc==="+91"?c.slice(-10):`${cc}${c}`;}
+function fmtDur(s){if(!s)return"—";const mm=Math.floor(s/60),ss=Math.round(s%60);return mm>0?`${mm}m ${ss}s`:`${ss}s`;}
+function dispNum(u){if(!u)return"";return u.countryCode==="+91"?u.mobile.replace(/\D/g,"").slice(-10):`${u.countryCode}${u.mobile.replace(/\D/g,"")}`;}
+function normSt(s){return(s||"NOT_STARTED").toUpperCase().replace(/ /g,"_");}
+
+const PhoneIcon=()=><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>;
+const LogOutIcon=()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>;
+const BackIcon=()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>;
+const NavIcon=({type})=>type==="about"
+  ?<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+  :<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>;
+
+function PulseRing({color,size=130,status}){
+  const isTerm=TERMINAL.includes(status);
+  const isAct=status==="IN_PROGRESS";
+  const m=STATUS_META[status]||STATUS_META.NOT_STARTED;
+  return(
+    <div style={{position:"relative",width:size,height:size,margin:"0 auto"}}>
+      {!isTerm&&<>
+        <div style={{position:"absolute",inset:0,borderRadius:"50%",border:`2px solid ${color}33`,animation:"pulseRing 2s ease-out infinite"}}/>
+        <div style={{position:"absolute",inset:0,borderRadius:"50%",border:`2px solid ${color}22`,animation:"pulseRing 2s ease-out infinite .6s"}}/>
+        <div style={{position:"absolute",inset:0,borderRadius:"50%",border:`2px solid ${color}11`,animation:"pulseRing 2s ease-out infinite 1.2s"}}/>
+      </>}
+      <div style={{position:"absolute",inset:12,borderRadius:"50%",background:`radial-gradient(circle at 40% 35%,${color}22,${color}08)`,border:`2px solid ${color}${isTerm?"55":"44"}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*.3,transition:"all .5s"}}>{m.icon}</div>
+      {isAct&&<div style={{position:"absolute",inset:4,borderRadius:"50%",border:"2px solid transparent",borderTopColor:color,animation:"spinSlow 3s linear infinite"}}/>}
+    </div>
+  );
+}
+
+function ElapsedTimer({startTime,endTime}){
+  const[el,setEl]=useState(0);
+  useEffect(()=>{
+    if(!startTime)return;
+    if(endTime){setEl(Math.round((new Date(endTime)-new Date(startTime))/1000));return;}
+    const iv=setInterval(()=>setEl(Math.round((Date.now()-new Date(startTime).getTime())/1000)),1000);
+    return()=>clearInterval(iv);
+  },[startTime,endTime]);
+  if(!startTime)return null;
+  const mm=Math.floor(el/60),ss=el%60;
+  return<span style={{fontFamily:"'Space Mono',monospace",fontSize:28,fontWeight:700,letterSpacing:".05em"}}>{String(mm).padStart(2,"0")}:{String(ss).padStart(2,"0")}</span>;
+}
+
+function App(){
+  const[page,setPage]=useState("playground");
+  const[loggedIn,setLoggedIn]=useState(false);
+  const[form,setForm]=useState({firstName:"",lastName:"",countryCode:"+91",mobile:""});
+  const[user,setUser]=useState(null);
+  const[mounted,setMounted]=useState(false);
+  const[activeCall,setActiveCall]=useState(null);
+  const[callData,setCallData]=useState(null);
+  const[triggerError,setTriggerError]=useState(null);
+  const[triggering,setTriggering]=useState(null);
+  const pollRef=useRef(null);
+  const loggedRef=useRef(false);
+
+  useEffect(()=>{setMounted(true);},[]);
+
+  const pollCall=useCallback(async(callId)=>{
+    try{
+      const res=await fetch(`${API_BASE}/api/calls/${callId}`);
+      if(!res.ok)return;
+      const text=await res.text();
+      if(!text)return;
+      const data=JSON.parse(text);
+      setCallData(data);
+      if(TERMINAL.includes(normSt(data.status))){
+        clearInterval(pollRef.current);pollRef.current=null;
+        if(!loggedRef.current){
+          loggedRef.current=true;
+          // Poll a few more times to wait for result fields to be populated
+          const fetchCall=async(id)=>{
+            try{const res=await fetch(`${API_BASE}/api/calls/${id}`);if(res.ok){const t=await res.text();if(t)return JSON.parse(t);}
+            }catch(e){}return null;
+          };
+          const logWhenReady=async()=>{
+            let latest=data;
+            for(let i=0;i<8;i++){
+              if(latest.result&&Object.keys(latest.result).length>0)break;
+              await new Promise(r=>setTimeout(r,3000));
+              const d=await fetchCall(latest.id);if(d){latest=d;setCallData(d);}
+            }
+            fetch(API_BASE+"/api/log",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(latest)})
+              .catch(e=>console.error("Sheet log error:",e));
+            // Re-fetch after 5 minutes and log again with final state
+            await new Promise(r=>setTimeout(r,5*60*1000));
+            const final=await fetchCall(latest.id);
+            if(final){
+              setCallData(final);
+              fetch(API_BASE+"/api/log",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(final)})
+                .catch(e=>console.error("Sheet 5min log error:",e));
+            }
+          };
+          logWhenReady();
+        }
+      }
+    }catch(e){console.error("Poll error:",e);}
+  },[]);
+
+  const startPolling=useCallback((callId)=>{
+    if(pollRef.current)clearInterval(pollRef.current);
+    pollCall(callId);
+    pollRef.current=setInterval(()=>pollCall(callId),POLL_INTERVAL);
+  },[pollCall]);
+
+  useEffect(()=>()=>{if(pollRef.current)clearInterval(pollRef.current);},[]);
+
+  const triggerCall=async(agent)=>{
+    if(!user)return;
+    setTriggering(agent.id);
+    setTriggerError(null);
+    loggedRef.current=false;
+    const payload={agent_id:agent.id,callee_name:user.firstName,mobile_number:fmtMobile(user.countryCode,user.mobile)};
+    try{
+      const res=await fetch(API_BASE+"/api/calls",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(payload),
+      });
+      const text=await res.text();
+      if(!text)throw new Error("Empty response from server");
+      const data=JSON.parse(text);
+      if(res.ok){
+        setActiveCall({callId:data.id,agent,status:data.status});
+        setCallData(data);setPage("monitor");startPolling(data.id);
+      }else{
+        setTriggerError(data.message||data.detail||JSON.stringify(data));
+      }
+    }catch(err){
+      setTriggerError(err.message||"Network error");
+    }finally{setTriggering(null);}
+  };
+
+  const goBack=()=>{if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}setActiveCall(null);setCallData(null);setTriggerError(null);setPage("playground");};
+  const handleLogin=()=>{if(!form.firstName||!form.lastName||!form.mobile)return;setUser({...form});setLoggedIn(true);};
+  const handleLogout=()=>{if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}setLoggedIn(false);setUser(null);setActiveCall(null);setCallData(null);setForm({firstName:"",lastName:"",countryCode:"+91",mobile:""});setPage("playground");};
+
+  const rawSt=callData?normSt(callData.status):"NOT_STARTED";
+  const curSt=STATUS_META[rawSt]?rawSt:"NOT_STARTED";
+  const meta=STATUS_META[curSt];
+  const isTerm=TERMINAL.includes(curSt);
+  const agC=activeCall?.agent?.color||"#276EF1";
+
+  const inp={width:"100%",padding:"14px 16px",background:"#111",border:"1px solid #222",borderRadius:10,color:"#fff",fontSize:15,fontFamily:"'DM Sans',sans-serif",outline:"none",transition:"border .2s"};
+  const lbl={fontSize:12,fontWeight:600,color:"#555",letterSpacing:".04em",textTransform:"uppercase",display:"block",marginBottom:8};
+
+  return(
+    <div style={{display:"flex",height:"100vh",width:"100vw",overflow:"hidden"}}>
+
+      {/* SIDEBAR */}
+      <div style={{width:260,minWidth:260,background:"#0a0a0a",borderRight:"1px solid #1a1a1a",display:"flex",flexDirection:"column"}}>
+        <div style={{padding:"28px 24px 20px",borderBottom:"1px solid #1a1a1a"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
+            <div style={{width:32,height:32,borderRadius:8,background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:16,color:"#000",fontFamily:"'Space Mono',monospace"}}>U</div>
+            <span style={{fontSize:18,fontWeight:700,letterSpacing:"-.02em"}}>Uber</span>
+            <span style={{fontSize:10,fontWeight:600,color:"#666",border:"1px solid #333",borderRadius:4,padding:"2px 6px",letterSpacing:".05em",textTransform:"uppercase"}}>Voice AI</span>
+          </div>
+          <p style={{fontSize:11,color:"#555",marginTop:8}}>Powered by Hunar.ai</p>
+        </div>
+        <nav style={{padding:"16px 12px",flex:1}}>
+          {[{key:"playground",label:"Playground",icon:"playground"},{key:"about",label:"About Hunar.ai",icon:"about"}].map(item=>(
+            <button key={item.key} onClick={()=>item.key==="playground"?goBack():setPage(item.key)}
+              style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"12px 14px",marginBottom:4,background:(page===item.key||(page==="monitor"&&item.key==="playground"))?"#1a1a1a":"transparent",border:"none",borderRadius:10,cursor:"pointer",color:(page===item.key||(page==="monitor"&&item.key==="playground"))?"#fff":"#777",fontSize:14,fontWeight:(page===item.key||(page==="monitor"&&item.key==="playground"))?600:400,fontFamily:"'DM Sans',sans-serif",transition:"all .2s"}}>
+              <NavIcon type={item.icon}/>{item.label}
+            </button>
+          ))}
+        </nav>
+        {loggedIn&&user&&(
+          <div style={{padding:"16px 16px 20px",borderTop:"1px solid #1a1a1a",animation:"slideIn .3s ease both"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{width:36,height:36,borderRadius:"50%",background:"#1a1a1a",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,border:"2px solid #333"}}>{user.firstName[0]}{user.lastName[0]}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user.firstName} {user.lastName}</div>
+                <div style={{fontSize:11,color:"#555"}}>{user.countryCode} {user.mobile}</div>
+              </div>
+              <button onClick={handleLogout} style={{background:"none",border:"none",color:"#555",cursor:"pointer",padding:6,borderRadius:6,display:"flex"}} title="Log out"><LogOutIcon/></button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* MAIN */}
+      <div style={{flex:1,overflow:"auto",background:"#000"}}>
+
+        {/* LOGIN */}
+        {page==="playground"&&!loggedIn&&(
+          <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100%",padding:40}}>
+            <div className={mounted?"fade-up":""} style={{width:"100%",maxWidth:440}}>
+              <div style={{marginBottom:40}}>
+                <h1 style={{fontSize:32,fontWeight:700,letterSpacing:"-.03em",marginBottom:8}}>Welcome</h1>
+                <p style={{fontSize:15,color:"#777"}}>Sign in to access the Voice AI Playground</p>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:16}}>
+                <div><label style={lbl}>First Name</label><input value={form.firstName} onChange={e=>setForm({...form,firstName:e.target.value})} placeholder="Enter first name" style={inp}/></div>
+                <div><label style={lbl}>Last Name</label><input value={form.lastName} onChange={e=>setForm({...form,lastName:e.target.value})} placeholder="Enter last name" style={inp}/></div>
+                <div>
+                  <label style={lbl}>Mobile Number</label>
+                  <div style={{display:"flex",gap:8}}>
+                    <select value={form.countryCode} onChange={e=>setForm({...form,countryCode:e.target.value})} style={{width:90,padding:"14px 8px 14px 12px",background:"#111",border:"1px solid #222",borderRadius:10,color:"#fff",fontSize:14,fontFamily:"'DM Sans',sans-serif",outline:"none",cursor:"pointer",appearance:"none",WebkitAppearance:"none",backgroundImage:`url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23666' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,backgroundRepeat:"no-repeat",backgroundPosition:"right 10px center"}}>
+                      {COUNTRY_CODES.map(c=><option key={c.code} value={c.code}>{c.code} {c.country}</option>)}
+                    </select>
+                    <input value={form.mobile} onChange={e=>setForm({...form,mobile:e.target.value.replace(/[^0-9]/g,"")})} placeholder="Enter mobile number" type="tel" style={{...inp,flex:1,width:"auto"}}/>
+                  </div>
+                </div>
+                <button onClick={handleLogin} disabled={!form.firstName||!form.lastName||!form.mobile} style={{marginTop:8,width:"100%",padding:"16px",background:(!form.firstName||!form.lastName||!form.mobile)?"#222":"#fff",color:(!form.firstName||!form.lastName||!form.mobile)?"#555":"#000",border:"none",borderRadius:10,fontSize:15,fontWeight:700,fontFamily:"'DM Sans',sans-serif",cursor:(!form.firstName||!form.lastName||!form.mobile)?"not-allowed":"pointer",transition:"all .25s"}}>Continue →</button>
+              </div>
+              <p style={{fontSize:12,color:"#444",marginTop:24,textAlign:"center"}}>By continuing, you agree to receive a voice AI demo call on your mobile number.</p>
+            </div>
+          </div>
+        )}
+
+        {/* AGENT TILES */}
+        {page==="playground"&&loggedIn&&(
+          <div style={{padding:"40px 48px",maxWidth:960,margin:"0 auto"}}>
+            <div className="fade-up" style={{marginBottom:40}}>
+              <p style={{fontSize:13,fontWeight:600,color:"#555",letterSpacing:".06em",textTransform:"uppercase",marginBottom:8}}>Voice AI Playground</p>
+              <div style={{display:"flex",alignItems:"baseline",flexWrap:"wrap",gap:"0 12px",marginBottom:6}}>
+                <h1 style={{fontSize:28,fontWeight:700,letterSpacing:"-.03em",margin:0}}>Driver Churn Agents</h1>
+                <span style={{fontSize:15,color:"#666"}}>that engage dormant drivers and check if all is okay!</span>
+              </div>
+              <p style={{fontSize:15,color:"#666",marginBottom:6}}>In this demo, you are the dormant driver.</p>
+              <p style={{fontSize:15,color:"#666"}}>Select a language agent to trigger a demo call to <strong style={{color:"#aaa"}}>{user.firstName}</strong> at <strong style={{color:"#aaa"}}>{dispNum(user)}</strong></p>
+            </div>
+            {triggerError&&(
+              <div className="fade-in" style={{padding:"14px 18px",background:"#ff3b3010",border:"1px solid #ff3b3033",borderRadius:12,marginBottom:20,display:"flex",alignItems:"center",gap:10}}>
+                <span style={{color:"#ff3b30",fontSize:16}}>⚠️</span>
+                <span style={{fontSize:13,color:"#ff3b30",wordBreak:"break-word"}}>{triggerError}</span>
+              </div>
+            )}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+              {AGENTS.map((ag,i)=>{
+                const isPlc=ag.id.startsWith("AGENT_ID_");
+                const isTrg=triggering===ag.id;
+                return(
+                  <div key={ag.id} className={`fade-up d${i+1}`} style={{background:"#0a0a0a",border:"1px solid #1a1a1a",borderRadius:16,padding:28,position:"relative",overflow:"hidden",opacity:isPlc?.45:1,transition:"all .3s"}}>
+                    <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:`linear-gradient(90deg,${ag.color}66,transparent)`}}/>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                      <span style={{fontSize:22}}>{ag.flag}</span>
+                      <span style={{fontSize:12,fontWeight:700,color:ag.color,background:ag.color+"15",padding:"3px 10px",borderRadius:20}}>{ag.langNative}</span>
+                    </div>
+                    <h3 style={{fontSize:17,fontWeight:700,letterSpacing:"-.02em",marginBottom:2}}>Driver Churn Agent</h3>
+                    <p style={{fontSize:12,color:"#555",marginBottom:14}}>{ag.lang}</p>
+                    <p style={{fontSize:13,color:"#555",lineHeight:1.5,marginBottom:20,minHeight:36}}>{ag.desc}</p>
+                    {isPlc?(
+                      <div style={{padding:"12px 16px",background:"#111",borderRadius:10,border:"1px solid #1a1a1a",textAlign:"center"}}><span style={{fontSize:13,color:"#444"}}>Coming soon</span></div>
+                    ):(
+                      <button onClick={()=>triggerCall(ag)} disabled={triggering!==null} style={{width:"100%",padding:"12px 16px",background:triggering?"#111":"#fff",color:triggering?"#444":"#000",border:"none",borderRadius:10,fontSize:14,fontWeight:700,fontFamily:"'DM Sans',sans-serif",cursor:triggering?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,transition:"all .2s"}}>
+                        {isTrg?<><div style={{width:16,height:16,border:"2px solid #444",borderTopColor:ag.color,borderRadius:"50%",animation:"spin .8s linear infinite"}}/>Triggering…</>:<><PhoneIcon/> Trigger Call</>}
+                      </button>
+                    )}
+                    <div style={{marginTop:12,fontSize:11,color:"#333",fontFamily:"'Space Mono',monospace",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>ID: {ag.id}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* CALL MONITOR */}
+        {page==="monitor"&&activeCall&&(
+          <div style={{padding:"40px 48px"}}>
+            <div className="fade-up" style={{marginBottom:28}}>
+              <button onClick={goBack} style={{background:"none",border:"none",color:"#555",cursor:"pointer",display:"flex",alignItems:"center",gap:6,fontSize:13,fontWeight:500,fontFamily:"'DM Sans',sans-serif",marginBottom:20,padding:0}}><BackIcon/> Back to Playground</button>
+              <p style={{fontSize:13,fontWeight:600,color:"#555",letterSpacing:".06em",textTransform:"uppercase",marginBottom:8}}>Call Monitor</p>
+              <h1 style={{fontSize:28,fontWeight:700,letterSpacing:"-.03em"}}>{activeCall.agent.flag} Driver Churn Agent · {activeCall.agent.lang}</h1>
+            </div>
+
+            <div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
+
+              {/* LEFT: Call Status */}
+              <div style={{flex:1,minWidth:0}}>
+                <div className="fade-up d1" style={{background:"#0a0a0a",border:"1px solid #1a1a1a",borderRadius:20,padding:"40px 32px",textAlign:"center",position:"relative",overflow:"hidden"}}>
+                  <div style={{position:"absolute",inset:0,opacity:.06,background:`radial-gradient(ellipse at 50% 0%,${agC},transparent 70%)`}}/>
+                  <PulseRing color={agC} size={130} status={curSt}/>
+                  <div style={{marginTop:24}}>
+                    <span style={{fontSize:13,fontWeight:700,color:meta.color,background:meta.color+"18",padding:"5px 14px",borderRadius:20,letterSpacing:".04em",textTransform:"uppercase"}}>{meta.label}</span>
+                  </div>
+                  <div style={{marginTop:20}}>
+                    <ElapsedTimer startTime={callData?.started_at} endTime={isTerm?callData?.ended_at:null}/>
+                    {!callData?.started_at&&<span style={{fontSize:14,color:"#444"}}>Waiting for connection…</span>}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4,marginTop:28}}>
+                    {PIPELINE.map(step=>{
+                      const sn=STATUS_META[step].step,cn=meta.step,ic=step===curSt,ip=sn<cn;
+                      return<div key={step} style={{width:ic?32:8,height:8,borderRadius:4,background:ip||ic?agC:"#222",transition:"all .4s",opacity:ip?.5:1}}/>;
+                    })}
+                  </div>
+                  <div style={{display:"flex",justifyContent:"center",gap:32,marginTop:28,fontSize:12,color:"#555"}}>
+                    <div><span style={{color:"#333"}}>Callee</span><br/><span style={{color:"#999",fontWeight:600}}>{callData?.callee_name||user?.firstName}</span></div>
+                    <div><span style={{color:"#333"}}>Number</span><br/><span style={{color:"#999",fontWeight:600}}>{callData?.mobile_number||dispNum(user)}</span></div>
+                    <div><span style={{color:"#333"}}>Call ID</span><br/><span style={{color:"#999",fontWeight:600,fontFamily:"'Space Mono',monospace",fontSize:11}}>{activeCall.callId?.slice(0,12)}…</span></div>
+                  </div>
+                  {!isTerm&&<p style={{marginTop:24,fontSize:12,color:"#333",animation:"pulse 2s infinite"}}>Polling for updates every {POLL_INTERVAL/1000}s…</p>}
+                </div>
+
+                {isTerm&&(
+                  <div className="slide-up" style={{textAlign:"center",marginTop:16}}>
+                    <button onClick={goBack} style={{padding:"14px 32px",background:"#fff",color:"#000",border:"none",borderRadius:10,fontSize:14,fontWeight:700,fontFamily:"'DM Sans',sans-serif",cursor:"pointer"}}>← Try Another Agent</button>
+                  </div>
+                )}
+              </div>
+
+              {/* RIGHT: Insights Panel */}
+              <div style={{flex:"0 0 320px",display:"flex",flexDirection:"column",gap:16}}>
+
+                {/* Call Insights */}
+                <div className="fade-up d2" style={{background:"#0a0a0a",border:"1px solid #1a1a1a",borderRadius:16,padding:24}}>
+                  <h3 style={{fontSize:14,fontWeight:700,marginBottom:16,display:"flex",alignItems:"center",gap:8}}><span>📊</span> Call Insights</h3>
+                  <div style={{borderRadius:10,overflow:"hidden",border:"1px solid #141414"}}>
+                    {[
+                      ["Status", isTerm?meta.label:null, isTerm?meta.color:null],
+                      ["Engagement", callData?.engagement_status||null, callData?.engagement_status==="ENGAGED"?"#06C167":callData?.engagement_status==="NOT_ENGAGED"?"#F6AE2D":null],
+                      ["Duration", callData?.duration_seconds?fmtDur(callData.duration_seconds):null],
+                      ["User Speech", callData?.user_speech_duration?fmtDur(callData.user_speech_duration):null],
+                      ["Answered By", callData?.answered_by||null],
+                      ["Call Ended By", callData?.call_ended_by||null],
+                      ["Language", callData?.language||activeCall.agent.lang],
+                      ["Started At", callData?.started_at?new Date(callData.started_at).toLocaleTimeString():null],
+                      ["Ended At", callData?.ended_at?new Date(callData.ended_at).toLocaleTimeString():null],
+                    ].map(([label,value,vc],idx,arr)=>(
+                      <div key={label} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 14px",background:idx%2===0?"#0f0f0f":"#0a0a0a",borderBottom:idx<arr.length-1?"1px solid #141414":"none"}}>
+                        <span style={{fontSize:11,color:"#555",fontWeight:500,textTransform:"uppercase",letterSpacing:".04em"}}>{label}</span>
+                        {value
+                          ?<span style={{fontSize:13,fontWeight:600,color:vc||"#ccc"}}>{value}</span>
+                          :<div style={{width:56,height:9,borderRadius:4,background:"#1a1a1a",animation:!isTerm?"pulse 2s infinite":"none"}}/>
+                        }
+                      </div>
+                    ))}
+                  </div>
+                  {callData?.recording_url&&(
+                    <div style={{marginTop:16,paddingTop:16,borderTop:"1px solid #1a1a1a"}}>
+                      <div style={{fontSize:11,color:"#444",textTransform:"uppercase",letterSpacing:".04em",marginBottom:8}}>Recording</div>
+                      <audio controls src={callData.recording_url} style={{width:"100%",height:36}}/>
+                    </div>
+                  )}
+                </div>
+
+                {/* Output Variables */}
+                <div className="fade-up d3" style={{background:"#0a0a0a",border:`1px solid ${callData?.result&&Object.keys(callData.result).length>0?agC+"33":"#1a1a1a"}`,borderRadius:16,padding:24,transition:"border-color .4s"}}>
+                  <h3 style={{fontSize:14,fontWeight:700,marginBottom:16,display:"flex",alignItems:"center",gap:8}}><span>🎯</span> Output Variables</h3>
+                  {callData?.result&&Object.keys(callData.result).length>0?(
+                    <div style={{borderRadius:10,overflow:"hidden",border:"1px solid #141414"}}>
+                      {Object.entries(callData.result).map(([k,v],idx,arr)=>(
+                        <div key={k} style={{padding:"12px 14px",background:idx%2===0?"#0f0f0f":"#0a0a0a",borderBottom:idx<arr.length-1?"1px solid #141414":"none"}}>
+                          <div style={{fontSize:11,color:"#555",textTransform:"capitalize",letterSpacing:".03em",marginBottom:5}}>{k.replace(/_/g," ")}</div>
+                          <div style={{fontSize:13,fontWeight:600,color:agC,lineHeight:1.5}}>{typeof v==="object"?JSON.stringify(v,null,2):String(v)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ):(
+                    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                      {[80,55,70,45].map((w,i)=>(
+                        <div key={i} style={{padding:"12px 14px",background:"#0f0f0f",borderRadius:8,border:"1px solid #141414"}}>
+                          <div style={{width:w,height:7,borderRadius:3,background:"#1a1a1a",marginBottom:8}}/>
+                          <div style={{width:"100%",height:10,borderRadius:3,background:"#1a1a1a",animation:`pulse 2s ${i*.15}s infinite`}}/>
+                        </div>
+                      ))}
+                      <p style={{fontSize:12,color:"#333",textAlign:"center",marginTop:4}}>{isTerm?"No output variables returned.":"Waiting for call to complete…"}</p>
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ABOUT */}
+        {page==="about"&&(
+          <div style={{padding:"48px 56px",maxWidth:720,margin:"0 auto"}}>
+            <div className="fade-up">
+              <p style={{fontSize:13,fontWeight:600,color:"#555",letterSpacing:".06em",textTransform:"uppercase",marginBottom:12}}>Technology Partner</p>
+              <h1 style={{fontSize:36,fontWeight:700,letterSpacing:"-.03em",marginBottom:8,lineHeight:1.1}}>About Hunar.ai</h1>
+              <div style={{width:48,height:3,background:"#fff",borderRadius:2,marginBottom:32}}/>
+            </div>
+            <div className="fade-up d1" style={{background:"#0a0a0a",border:"1px solid #1a1a1a",borderRadius:16,padding:"36px 32px"}}>
+              <div style={{fontSize:15,color:"#999",lineHeight:1.8}}>
+                <p style={{color:"#ccc",fontSize:17,fontWeight:500,marginBottom:20}}>Hunar.ai is a <strong>Conversational Voice AI</strong> company that brings strong brands closer to its target audience. Hunar.ai builds enterprise-grade voice AI agents that conduct natural, human-like conversations at scale.</p>
+                <p style={{marginBottom:16}}>Our multilingual voice AI platform enables enterprises to automate high-volume outbound and inbound calls with context-aware, emotionally intelligent agents. Built for industries like eCommerce, BFSI, Logistics, and Healthcare.</p>
+                <p style={{marginBottom:16}}>Hunar's proprietary Voice to Voice (V2V / S2S) speech models are fine-tuned for Indian languages and code-mixed conversations, achieving near-human comprehension and natural turn-taking.</p>
+                <p style={{marginBottom:16}}>The platform integrates seamlessly with existing CRM, telephony, and data systems — enabling deployment in days, not months.</p>
+                <div style={{marginTop:28,padding:"20px 24px",background:"#111",borderRadius:12,border:"1px solid #1a1a1a"}}>
+                  <p style={{fontSize:13,fontWeight:600,color:"#555",letterSpacing:".04em",textTransform:"uppercase",marginBottom:12}}>Key Capabilities</p>
+                  {["Multilingual voice agents — Hindi, Tamil, Telugu, Spanish & more","Sub-second latency with real-time speech understanding","Enterprise telephony integration (SIP, PSTN, WebRTC)","Custom voice cloning & persona design","Real-time analytics & conversation intelligence"].map((c,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"8px 0",borderBottom:i<4?"1px solid #1a1a1a":"none"}}>
+                      <span style={{color:"#06C167",fontSize:14,marginTop:1}}>✦</span>
+                      <span style={{fontSize:14,color:"#888"}}>{c}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{marginTop:28,padding:"20px 24px",background:"#111",borderRadius:12,border:"1px solid #1a1a1a"}}>
+                  <p style={{fontSize:13,fontWeight:600,color:"#555",letterSpacing:".04em",textTransform:"uppercase",marginBottom:12}}>Our Customers</p>
+                  <p style={{fontSize:14,color:"#888",lineHeight:1.8}}>
+                    <strong style={{color:"#ccc"}}>Swiggy, Delhivery, Blue Dart, Aditya Birla Capital, Tata 1mg, Dr. Lal Path Labs</strong>
+                  </p>
+                </div>
+                <p style={{marginTop:28,fontSize:14,color:"#666"}}>Check out <a href="https://www.hunar.ai" target="_blank" rel="noopener noreferrer" style={{color:"#06C167",textDecoration:"none"}}>www.hunar.ai</a> for more information.</p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
