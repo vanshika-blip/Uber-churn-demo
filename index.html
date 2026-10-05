@@ -115,6 +115,8 @@ function App(){
   const[callData,setCallData]=useState(null);
   const[triggerError,setTriggerError]=useState(null);
   const[triggering,setTriggering]=useState(null);
+  const[testAgent,setTestAgent]=useState(null);
+  const[callInfo,setCallInfo]=useState({city:"",days:""});
   const pollRef=useRef(null);
   const loggedRef=useRef(false);
 
@@ -165,7 +167,8 @@ function App(){
     setTriggering(agent.id);
     setTriggerError(null);
     loggedRef.current=false;
-    const payload={agent_id:agent.id,callee_name:user.firstName,mobile_number:fmtMobile(user.countryCode,user.mobile)};
+    const payload={agent_id:agent.id,callee_name:user.firstName,mobile_number:fmtMobile(user.countryCode,user.mobile),
+      custom_data:{city:callInfo.city.trim(),days_since_last_trip:Number(callInfo.days)}};
     try{
       const res=await fetch(API_BASE+"/api/calls",{
         method:"POST",
@@ -301,7 +304,7 @@ function App(){
                     {isPlc?(
                       <div style={{padding:"12px 16px",background:"#111",borderRadius:10,border:"1px solid #1a1a1a",textAlign:"center"}}><span style={{fontSize:13,color:"#444"}}>Coming soon</span></div>
                     ):(
-                      <button onClick={()=>triggerCall(ag)} disabled={triggering!==null} style={{width:"100%",padding:"12px 16px",background:triggering?"#111":"#fff",color:triggering?"#444":"#000",border:"none",borderRadius:10,fontSize:14,fontWeight:700,fontFamily:"'DM Sans',sans-serif",cursor:triggering?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,transition:"all .2s"}}>
+                      <button onClick={()=>{setTriggerError(null);setTestAgent(ag);}} disabled={triggering!==null} style={{width:"100%",padding:"12px 16px",background:triggering?"#111":"#fff",color:triggering?"#444":"#000",border:"none",borderRadius:10,fontSize:14,fontWeight:700,fontFamily:"'DM Sans',sans-serif",cursor:triggering?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,transition:"all .2s"}}>
                         {isTrg?<><div style={{width:16,height:16,border:"2px solid #444",borderTopColor:ag.color,borderRadius:"50%",animation:"spin .8s linear infinite"}}/>Triggering…</>:<><PhoneIcon/> Trigger Call</>}
                       </button>
                     )}
@@ -309,6 +312,25 @@ function App(){
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/* CALL DETAILS POPUP */}
+        {testAgent&&(
+          <div onClick={()=>setTestAgent(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100,padding:20}}>
+            <div className="fade-in" onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:420,background:"#0a0a0a",border:"1px solid #222",borderRadius:16,padding:28,position:"relative",overflow:"hidden"}}>
+              <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:`linear-gradient(90deg,${testAgent.color},transparent)`}}/>
+              <h3 style={{fontSize:18,fontWeight:700,letterSpacing:"-.02em",marginBottom:4}}>{testAgent.flag} Test {testAgent.lang} Agent</h3>
+              <p style={{fontSize:13,color:"#555",marginBottom:22}}>Add the driver details for this call.</p>
+              <div style={{display:"flex",flexDirection:"column",gap:16,marginBottom:24}}>
+                <div><label style={lbl}>City</label><input autoFocus value={callInfo.city} onChange={e=>setCallInfo({...callInfo,city:e.target.value})} placeholder="e.g. Bengaluru" style={inp}/></div>
+                <div><label style={lbl}>Days Since Last Trip</label><input value={callInfo.days} onChange={e=>setCallInfo({...callInfo,days:e.target.value.replace(/[^0-9]/g,"")})} placeholder="e.g. 14" type="tel" style={inp}/></div>
+              </div>
+              <div style={{display:"flex",gap:10}}>
+                <button onClick={()=>setTestAgent(null)} style={{flex:1,padding:"12px 16px",background:"#111",color:"#aaa",border:"1px solid #222",borderRadius:10,fontSize:14,fontWeight:600,fontFamily:"'DM Sans',sans-serif",cursor:"pointer"}}>Cancel</button>
+                <button disabled={!callInfo.city.trim()||callInfo.days===""} onClick={()=>{const ag=testAgent;setTestAgent(null);triggerCall(ag);}} style={{flex:2,padding:"12px 16px",background:(!callInfo.city.trim()||callInfo.days==="")?"#222":"#fff",color:(!callInfo.city.trim()||callInfo.days==="")?"#555":"#000",border:"none",borderRadius:10,fontSize:14,fontWeight:700,fontFamily:"'DM Sans',sans-serif",cursor:(!callInfo.city.trim()||callInfo.days==="")?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><PhoneIcon/> Start Call</button>
+              </div>
             </div>
           </div>
         )}
