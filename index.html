@@ -34,9 +34,8 @@
 <script type="text/babel" data-type="module">
 const{useState,useEffect,useRef,useCallback}=React;
 
-// API_BASE is filled in automatically by the GitHub Actions deploy (Cloudflare Worker URL).
-// Left as the placeholder, the app calls its own /api routes (when served by the Worker itself).
-const API_BASE="__API_BASE__".startsWith("__")?"":"__API_BASE__";
+// API routes live on the same Vercel site (/api/calls, /api/call-status).
+const API_BASE="";
 const POLL_INTERVAL=4000;
 const AGENTS=[
   {id:"80413065-565e-48d0-813d-0a4597fe9d83",lang:"Hindi",langNative:"हिन्दी",flag:"🇮🇳",color:"#276EF1",desc:"Engage drivers in fluent Hindi with culturally aware churn-prevention conversations."},
@@ -123,7 +122,7 @@ function App(){
 
   const pollCall=useCallback(async(callId)=>{
     try{
-      const res=await fetch(`${API_BASE}/api/calls/${callId}`);
+      const res=await fetch(`${API_BASE}/api/call-status?id=${encodeURIComponent(callId)}`);
       if(!res.ok)return;
       const text=await res.text();
       if(!text)return;
@@ -135,28 +134,19 @@ function App(){
           loggedRef.current=true;
           // Poll a few more times to wait for result fields to be populated
           const fetchCall=async(id)=>{
-            try{const res=await fetch(`${API_BASE}/api/calls/${id}`);if(res.ok){const t=await res.text();if(t)return JSON.parse(t);}
+            try{const res=await fetch(`${API_BASE}/api/call-status?id=${encodeURIComponent(id)}`);if(res.ok){const t=await res.text();if(t)return JSON.parse(t);}
             }catch(e){}return null;
           };
-          const logWhenReady=async()=>{
+          // Re-check a few times so the call result fields show up on screen
+          const refreshResult=async()=>{
             let latest=data;
             for(let i=0;i<8;i++){
               if(latest.result&&Object.keys(latest.result).length>0)break;
               await new Promise(r=>setTimeout(r,3000));
               const d=await fetchCall(latest.id);if(d){latest=d;setCallData(d);}
             }
-            fetch(API_BASE+"/api/log",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(latest)})
-              .catch(e=>console.error("Sheet log error:",e));
-            // Re-fetch after 5 minutes and log again with final state
-            await new Promise(r=>setTimeout(r,5*60*1000));
-            const final=await fetchCall(latest.id);
-            if(final){
-              setCallData(final);
-              fetch(API_BASE+"/api/log",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(final)})
-                .catch(e=>console.error("Sheet 5min log error:",e));
-            }
           };
-          logWhenReady();
+          refreshResult();
         }
       }
     }catch(e){console.error("Poll error:",e);}
@@ -184,7 +174,9 @@ function App(){
       });
       const text=await res.text();
       if(!text)throw new Error("Empty response from server");
-      const data=JSON.parse(text);
+      let data;
+      try{data=JSON.parse(text);}
+      catch{throw new Error(res.status===404?"API not found (404) — the /api folder isn't deployed. Check the GitHub repo has an api/ folder at the top level.":`Server error (${res.status}). Please try again.`);}
       if(res.ok){
         setActiveCall({callId:data.id,agent,status:data.status});
         setCallData(data);setPage("monitor");startPolling(data.id);
