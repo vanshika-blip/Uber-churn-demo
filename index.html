@@ -168,7 +168,7 @@ function App(){
     setTriggerError(null);
     loggedRef.current=false;
     const payload={agent_id:agent.id,callee_name:user.firstName,mobile_number:fmtMobile(user.countryCode,user.mobile),
-      custom_data:{city:callInfo.city.trim(),days_since_last_trip:Number(callInfo.days)}};
+      custom_data:{city:callInfo.city.trim(),days_since_last_trip:String(callInfo.days)}};
     try{
       const res=await fetch(API_BASE+"/api/calls",{
         method:"POST",
